@@ -272,6 +272,15 @@ class CourseUpdate(BaseModel):
     description: str | None = None
     is_public: bool | None = None
 
+class AttachmentResponse(BaseModel):
+    id: int
+    module_id: int
+    filename: str
+    file_path: str
+
+    class Config:
+        from_attributes = True
+
 class ModuleResponse(BaseModel):
     id: int
     course_id: int
@@ -280,15 +289,6 @@ class ModuleResponse(BaseModel):
     order_index: int
     surveys: list[SurveyResponse] = []
     attachments: list[AttachmentResponse] = []
-
-    class Config:
-        from_attributes = True
-
-class AttachmentResponse(BaseModel):
-    id: int
-    module_id: int
-    filename: str
-    file_path: str
 
     class Config:
         from_attributes = True
