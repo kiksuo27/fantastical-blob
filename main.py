@@ -31,7 +31,12 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://fantastical-blob-frontend.vercel.app"],
+    allow_origins=[
+        "http://localhost:5173", 
+        "https://fantastical-blob-frontend.vercel.app",
+        "https://www.devonshireathletics.com",
+        "https://devonshireathletics.com"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
