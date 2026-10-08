@@ -71,12 +71,11 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db), current
 
 @app.get("/users", response_model = list[schemas.UserResponse])
 def get_users(db: Session = Depends(get_db), current_user: models.User = Depends (require_admin)):
-    return db.query(models.User).filter(models.User.deleted_at.is_(None)).all()
+    return db.query(models.User).filter(models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).all()
 
 @app.put("/users/{user_id}", response_model = schemas.UserResponse)
 def update_user(user_id: int, updated_user: schemas.UserUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-
+    user = get_user_in_org(db, user_id, current_user, include_deleted=True)
     if user is None:
         raise HTTPException(status_code=404, detail= "User not found")
 
@@ -95,7 +94,7 @@ def update_user(user_id: int, updated_user: schemas.UserUpdate, db: Session = De
 
 @app.put("/users/{user_id}/super-admin")
 def set_super_admin(user_id: int, is_super_admin: bool, db: Session = Depends(get_db), current_user: models.User = Depends(require_super_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = get_user_in_org(db, user_id, current_user, include_deleted=True)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     if user.role != "admin":
@@ -109,7 +108,7 @@ def set_super_admin(user_id: int, is_super_admin: bool, db: Session = Depends(ge
 
 @app.delete("/users/{user_id}")
 def delete_user(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None)).first()
+    user = get_user_in_org(db, user_id, current_user)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -220,6 +219,9 @@ def get_my_latest_attempt(assessment_id: int, db: Session = Depends(get_db), cur
 
 @app.get("/assessments/{assessment_id}/users/{user_id}/latest-attempt", response_model=schemas.AttemptResponse | None)
 def get_user_latest_attempt(assessment_id: int, user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
+    target = get_user_in_org(db, user_id, current_user, include_deleted=True)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
     return (
         db.query(models.AssessmentAttempt)
         .filter(models.AssessmentAttempt.assessment_id == assessment_id)
@@ -251,6 +253,9 @@ def get_my_attempts_across_assessments(db: Session = Depends(get_db), current_us
 
 @app.get("/assessments/{assessment_id}/users/{user_id}/attempt-detail")
 def get_user_attempt_detail(assessment_id: int, user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
+    target = get_user_in_org(db, user_id, current_user, include_deleted=True)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
     attempt = (
         db.query(models.AssessmentAttempt)
         .filter(models.AssessmentAttempt.assessment_id == assessment_id)
@@ -315,7 +320,7 @@ def get_filtered_scores(
 
     grouped = {}
     for user_id, attempt in latest_attempts.items():
-        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None)).first()
+        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).first()
         if user is None:
             continue
 
@@ -351,7 +356,7 @@ def get_filtered_scores(
 
 @app.delete("/assessments/{assessment_id}/users/{user_id}/reset")
 def reset_user_assessment_data(assessment_id: int, user_id: int, reason: str | None = None, db: Session = Depends(get_db), current_user: models.User = Depends(require_super_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = get_user_in_org(db, user_id, current_user, include_deleted=True)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -541,7 +546,7 @@ def get_my_proficiency(db: Session = Depends(get_db), current_user: models.User 
 
 @app.get("/users/{user_id}/proficiency")
 def get_user_proficiency(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = get_user_in_org(db, user_id, current_user, include_deleted=True)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return calculate_proficiency(user_id, db)
@@ -554,7 +559,8 @@ def get_team_average(assessment_id: int, db: Session = Depends(get_db), current_
     latest_attempts = {}
     attempts = (
         db.query(models.AssessmentAttempt)
-        .filter(models.AssessmentAttempt.assessment_id == assessment_id)
+        .join(models.User, models.AssessmentAttempt.user_id == models.User.id)
+        .filter(models.AssessmentAttempt.assessment_id == assessment_id, models.User.organization_id == current_user.organization_id, models.User.deleted_at.is_(None))
         .order_by(models.AssessmentAttempt.submitted_at)
         .all()
     )
@@ -579,8 +585,10 @@ def get_category_averages(assessment_id: int, db: Session = Depends(get_db), cur
         )
         .join(models.Response, models.Response.question_id == models.Question.id)
         .join(models.AssessmentAttempt, models.Response.attempt_id == models.AssessmentAttempt.id)
+        .join(models.User, models.AssessmentAttempt.user_id == models.User.id)
         .filter(models.AssessmentAttempt.assessment_id == assessment_id)
         .filter(models.Question.category.isnot(None))
+        .filter(models.User.organization_id == current_user.organization_id, models.User.deleted_at.is_(None))
         .filter(models.Response.answer_value.isnot(None))
         .group_by(models.Question.category)
         .all()
@@ -605,7 +613,7 @@ def get_position_averages(assessment_id: int, db: Session = Depends(get_db), cur
 
     position_scores = {}
     for user_id, attempt in latest_attempts.items():
-        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None)).first()
+        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).first()
         if user is None:
             continue
         position_scores.setdefault(user.position, []).append(attempt.total_score)
@@ -617,7 +625,7 @@ def get_position_averages(assessment_id: int, db: Session = Depends(get_db), cur
 
 @app.get("/analytics/by-position/{position}")
 def get_position_detail(position: str, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    players = db.query(models.User).filter(models.User.role == "player", models.User.position == position, models.User.deleted_at.is_(None)).all()
+    players = db.query(models.User).filter(models.User.role == "player", models.User.position == position, models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).all()
 
     player_scores = []
     for player in players:
@@ -634,7 +642,7 @@ def get_position_detail(position: str, db: Session = Depends(get_db), current_us
 
 @app.get("/users/{user_id}/category-breakdown")
 def get_user_category_breakdown(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = get_user_in_org(db, user_id, current_user, include_deleted=True)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -680,7 +688,8 @@ def get_my_category_breakdown(db: Session = Depends(get_db), current_user: model
 def get_trend(assessment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
     attempts = (
         db.query(models.AssessmentAttempt)
-        .filter(models.AssessmentAttempt.assessment_id == assessment_id)
+        .join(models.User, models.AssessmentAttempt.user_id == models.User.id)
+        .filter(models.AssessmentAttempt.assessment_id == assessment_id, models.User.organization_id == current_user.organization_id,models.User.deleted_at.is_(None))
         .order_by(models.AssessmentAttempt.submitted_at)
         .all()
     )
@@ -711,7 +720,7 @@ def get_durations(assessment_id: int, group_by: str | None = None, db: Session =
     if not group_by:
         results = []
         for user_id, attempt in latest_attempts.items():
-            user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None)).first()
+            user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).first()
             if user is None:
                 continue
             results.append({"user_id": user_id, "user_name": user.name, "duration_seconds": attempt.duration_seconds})
@@ -719,7 +728,7 @@ def get_durations(assessment_id: int, group_by: str | None = None, db: Session =
 
     grouped = {}
     for user_id, attempt in latest_attempts.items():
-        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None)).first()
+        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).first()
         if user is None:
             continue
 
@@ -754,7 +763,9 @@ def get_category_timing(assessment_id: int, db: Session = Depends(get_db), curre
         )
         .join(models.Response, models.Response.question_id == models.Question.id)
         .join(models.AssessmentAttempt, models.Response.attempt_id == models.AssessmentAttempt.id)
+        .join(models.User, models.AssessmentAttempt.user_id == models.User.id)
         .filter(models.AssessmentAttempt.assessment_id == assessment_id)
+        .filter(models.User.organization_id == current_user.organization_id, models.User.deleted_at.is_(None))
         .filter(models.Question.category.isnot(None))
         .filter(models.Response.time_taken_seconds.isnot(None))
         .group_by(models.Question.category)
@@ -773,7 +784,9 @@ def get_rapid_responses(assessment_id: int, threshold: float = 1.5, db: Session 
         db.query(models.Response, models.Question)
         .join(models.Question, models.Response.question_id == models.Question.id)
         .join(models.AssessmentAttempt, models.Response.attempt_id == models.AssessmentAttempt.id)
+        .join(models.User, models.AssessmentAttempt.user_id == models.User.id)
         .filter(models.AssessmentAttempt.assessment_id == assessment_id)
+        .filter(models.User.organization_id == current_user.organization_id, models.User.deleted_at.is_(None))
         .filter(models.Response.time_taken_seconds.isnot(None))
         .all()
     )
@@ -906,6 +919,7 @@ def score_to_level(total_score: int) -> str:
     else:
         return "Not enough data"
 
+
 def get_module_in_org(db: Session, module_id: int, user: models.User):
     return (
         db.query(models.Module)
@@ -917,6 +931,15 @@ def get_module_in_org(db: Session, module_id: int, user: models.User):
         )
         .first()
     )
+
+def get_user_in_org(db: Session, user_id: int, current_user: models.User, include_deleted: bool = False):
+    q = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.organization_id == current_user.organization_id,
+    )
+    if not include_deleted:
+        q = q.filter(models.User.deleted_at.is_(None))
+    return q.first()
 
 def get_survey_in_org(db: Session, survey_id: int, user: models.User):
     return (
@@ -1691,7 +1714,7 @@ def search(q: str, db: Session = Depends(get_db), current_user: models.User = De
             results.append({"type": "Announcement", "title": an.title, "path": landing})
 
     if current_user.role == "admin":
-        matching_users = db.query(models.User).filter(models.User.name.ilike(query), models.User.deleted_at.is_(None)).all()
+        matching_users = db.query(models.User).filter(models.User.name.ilike(query), models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).all()
         for u in matching_users:
             if u.role == "admin":
                 results.append({"type": "Staff", "title": u.name, "path": "/staff/roster"})
@@ -1804,7 +1827,7 @@ def delete_partner(partner_id: int, db: Session = Depends(get_db), current_user:
 
 @app.get("/archive/users")
 def get_archived_users(db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    users = db.query(models.User).filter(models.User.deleted_at.is_not(None)).all()
+    users = db.query(models.User).filter(models.User.deleted_at.is_not(None), models.User.organization_id == current_user.organization_id).all()
     return [
         {"id": u.id, "name": u.name, "email": u.email, "role": u.role, "deleted_at": u.deleted_at}
         for u in users
@@ -1813,7 +1836,7 @@ def get_archived_users(db: Session = Depends(get_db), current_user: models.User 
 
 @app.post("/archive/users/{user_id}/restore")
 def restore_user(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = get_user_in_org(db, user_id, current_user, include_deleted=True)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     user.deleted_at = None
@@ -1822,7 +1845,7 @@ def restore_user(user_id: int, db: Session = Depends(get_db), current_user: mode
 
 @app.delete("/archive/users/{user_id}/permanent")
 def permanently_delete_user(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    user = get_user_in_org(db, user_id, current_user, include_deleted=True)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -1975,7 +1998,7 @@ def delete_sticky_note(note_id: int, db: Session = Depends(get_db), current_user
 
 @app.post("/touchpoints", response_model=schemas.TouchpointResponse)
 def create_touchpoint(touchpoint: schemas.TouchpointCreate, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    user = db.query(models.User).filter(models.User.id == touchpoint.user_id, models.User.deleted_at.is_(None)).first()
+    user = get_user_in_org(db, touchpoint.user_id, current_user)
     if user is None:
         raise HTTPException(status_code=404, detail="Player not found")
 
@@ -2040,7 +2063,7 @@ def get_touchpoint_frequency(
 
     grouped = {}
     for tp in touchpoints:
-        user = db.query(models.User).filter(models.User.id == tp.user_id, models.User.deleted_at.is_(None)).first()
+        user = db.query(models.User).filter(models.User.id == tp.user_id, models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).first()
         if user is None:
             continue
 
@@ -2085,6 +2108,9 @@ def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db), c
 def get_user_resumes(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
     if current_user.id != user_id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Not authorized to view this resume")
+    target = get_user_in_org(db, user_id, current_user, include_deleted=True)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
 
     return (
         db.query(models.Resume)
@@ -2163,7 +2189,7 @@ def get_community_service_totals(db: Session = Depends(get_db), current_user: mo
 
     output = []
     for user_id, total_hours in results:
-        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None)).first()
+        user = db.query(models.User).filter(models.User.id == user_id, models.User.deleted_at.is_(None), models.User.organization_id == current_user.organization_id).first()
         if user is None:
             continue
         output.append({"user_id": user_id, "user_name": user.name, "total_hours": round(total_hours, 1)})
@@ -2173,6 +2199,9 @@ def get_community_service_totals(db: Session = Depends(get_db), current_user: mo
 
 @app.get("/community-service/users/{user_id}", response_model=list[schemas.CommunityServiceResponse])
 def get_user_community_service(user_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
+    target = get_user_in_org(db, user_id, current_user, include_deleted=True)
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
     return (
         db.query(models.CommunityServiceLog)
         .filter(models.CommunityServiceLog.user_id == user_id)
