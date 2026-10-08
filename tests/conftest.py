@@ -33,3 +33,27 @@ def db_session():
 @pytest.fixture()
 def client(db_session):
     return TestClient(app)
+
+@pytest.fixture()
+def test_org(db_session):
+    db = TestingSessionLocal()
+    import models
+    org = models.Organization(name="Test Org", plan="single_team")
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    org_id = org.id
+    db.close()
+    return org_id
+
+@pytest.fixture()
+def second_org(db_session):
+    db = TestingSessionLocal()
+    import models
+    org = models.Organization(name="Second Test Org", plan="single_team")
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    org_id = org.id
+    db.close()
+    return org_id

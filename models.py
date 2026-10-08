@@ -3,6 +3,26 @@ from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, D
 from sqlalchemy.orm import relationship
 from database import Base
 
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    plan = Column(String, nullable=False, default="single_team")  # "single_team" or "full_department"
+    trial_ends_at = Column(DateTime, nullable=True)
+    primary_color = Column(String, nullable=True)
+    secondary_color = Column(String, nullable=True)
+    logo_url = Column(String, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class OrganizationFeature(Base):
+    __tablename__ = "organization_features"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
+    feature_name = Column(String, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key = True, index = True)
@@ -19,6 +39,7 @@ class User(Base):
     birthday = Column(Date, nullable=True)
     deleted_at = Column(DateTime, nullable=True, default=None)
     is_super_admin = Column(Boolean, nullable=False, default=False)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     
 
 class Assessment(Base):
@@ -123,6 +144,7 @@ class Course(Base):
     is_public = Column(Boolean, nullable=False, default=False)
     content_type = Column(String, nullable=False, default="programming")  # "programming" or "events"
     deleted_at = Column(DateTime, nullable=True, default=None)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
 
 
     modules = relationship("Module", back_populates="course", order_by="Module.order_index")

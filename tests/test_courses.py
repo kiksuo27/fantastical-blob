@@ -3,7 +3,7 @@ from auth import hash_password
 import models
 
 
-def make_admin_and_login(client):
+def make_admin_and_login(client, test_org):
     db = TestingSessionLocal()
     admin = models.User(
         name="Course Test Admin",
@@ -12,7 +12,8 @@ def make_admin_and_login(client):
         year=0,
         email="courseadmin@test.com",
         password_hash=hash_password("adminpass123"),
-        role="admin"
+        role="admin",
+        organization_id=test_org
     )
     db.add(admin)
     db.commit()
@@ -22,8 +23,8 @@ def make_admin_and_login(client):
     return login.json()["access_token"]
 
 
-def test_admin_can_delete_and_restore_course(client, db_session):
-    admin_token = make_admin_and_login(client)
+def test_admin_can_delete_and_restore_course(client, db_session, test_org):
+    admin_token = make_admin_and_login(client, test_org)
 
     create_response = client.post(
         "/courses",

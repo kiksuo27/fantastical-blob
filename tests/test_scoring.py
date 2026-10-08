@@ -3,7 +3,7 @@ from tests.conftest import TestingSessionLocal
 from auth import hash_password
 
 
-def make_admin_and_login(client):
+def make_admin_and_login(client, test_org):
     db = TestingSessionLocal()
     import models
     admin = models.User(
@@ -13,7 +13,8 @@ def make_admin_and_login(client):
         year=0,
         email="scoreadmin@test.com",
         password_hash=hash_password("adminpass123"),
-        role="admin"
+        role="admin",
+        organization_id=test_org
     )
     db.add(admin)
     db.commit()
@@ -23,7 +24,7 @@ def make_admin_and_login(client):
     return login.json()["access_token"]
 
 
-def make_player_and_login(client, admin_token, email="scoreplayer@test.com"):
+def make_player_and_login(client, admin_token, test_org, email="scoreplayer@test.com"):
     client.post(
         "/users",
         json={
@@ -41,9 +42,9 @@ def make_player_and_login(client, admin_token, email="scoreplayer@test.com"):
     return login.json()["access_token"]
 
 
-def test_scoring_totals_only_count_scored_questions(client, db_session):
-    admin_token = make_admin_and_login(client)
-    player_token = make_player_and_login(client, admin_token)
+def test_scoring_totals_only_count_scored_questions(client, db_session, test_org):
+    admin_token = make_admin_and_login(client, test_org)
+    player_token = make_player_and_login(client, admin_token, test_org)
 
     # Create an assessment
     assessment_response = client.post(
@@ -85,9 +86,9 @@ def test_scoring_totals_only_count_scored_questions(client, db_session):
     assert result["total_score"] == 3
 
 
-def test_proficiency_band_boundaries(client, db_session):
-    admin_token = make_admin_and_login(client)
-    player_token = make_player_and_login(client, admin_token, email="bandplayer@test.com")
+def test_proficiency_band_boundaries(client, db_session, test_org):
+    admin_token = make_admin_and_login(client, test_org)
+    player_token = make_player_and_login(client, admin_token,test_org, email="bandplayer@test.com")
 
     assessment_response = client.post(
         "/assessments",
@@ -121,9 +122,9 @@ def test_proficiency_band_boundaries(client, db_session):
         assert response.json()["level"] == expected_level, f"Score {score_value} should be {expected_level}"
 
 
-def test_player_cannot_see_others_proficiency(client, db_session):
-    admin_token = make_admin_and_login(client)
-    player_token = make_player_and_login(client, admin_token, email="privacyplayer@test.com")
+def test_player_cannot_see_others_proficiency(client, db_session, test_org):
+    admin_token = make_admin_and_login(client, test_org)
+    player_token = make_player_and_login(client, admin_token, test_org, email="privacyplayer@test.com")
 
     # A player trying to check another user's proficiency should be blocked
     response = client.get(

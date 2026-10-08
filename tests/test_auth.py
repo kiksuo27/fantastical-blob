@@ -20,7 +20,7 @@ def test_login_with_wrong_password_fails(client):
 
     assert response.status_code == 401
 
-def create_admin_directly(db_session):
+def create_admin_directly(db_session, test_org):
     from database import TestingSessionLocal
     from auth import hash_password
     import models
@@ -33,14 +33,15 @@ def create_admin_directly(db_session):
         year=0,
         email="admin@test.com",
         password_hash=hash_password("adminpass123"),
-        role="admin"
+        role="admin",
+        organization_id=test_org
     )
     db.add(admin)
     db.commit()
     db.close()
 
 
-def test_full_player_signup_flow(client, db_session):
+def test_full_player_signup_flow(client, db_session, test_org):
     from tests.conftest import TestingSessionLocal
     from auth import hash_password
     import models
@@ -54,7 +55,8 @@ def test_full_player_signup_flow(client, db_session):
         year=0,
         email="admin@test.com",
         password_hash=hash_password("adminpass123"),
-        role="admin"
+        role="admin",
+        organization_id=test_org
     )
     db.add(admin)
     db.commit()

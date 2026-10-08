@@ -61,7 +61,8 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db), current
         is_offense = user.is_offense,
         is_defense =user.is_defense,
         is_special_teams = user.is_special_teams,
-        role=user.role
+        role=user.role,
+        organization_id = current_user.organization_id
     )
     db.add(new_user)
     db.commit()
@@ -905,7 +906,47 @@ def score_to_level(total_score: int) -> str:
     else:
         return "Not enough data"
 
+def get_module_in_org(db: Session, module_id: int, user: models.User):
+    return (
+        db.query(models.Module)
+        .join(models.Course, models.Module.course_id == models.Course.id)
+        .filter(
+            models.Module.id == module_id,
+            models.Course.organization_id == user.organization_id,
+            models.Course.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+def get_survey_in_org(db: Session, survey_id: int, user: models.User):
+    return (
+        db.query(models.Survey)
+        .join(models.Module, models.Survey.module_id == models.Module.id)
+        .join(models.Course, models.Module.course_id == models.Course.id)
+        .filter(
+            models.Survey.id == survey_id,
+            models.Course.organization_id == user.organization_id,
+            models.Course.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+def get_attachment_in_org(db: Session, attachment_id: int, user: models.User):
+    return (
+        db.query(models.Attachment)
+        .join(models.Module, models.Attachment.module_id == models.Module.id)
+        .join(models.Course, models.Module.course_id == models.Course.id)
+        .filter(
+            models.Attachment.id == attachment_id,
+            models.Course.organization_id == user.organization_id,
+            models.Course.deleted_at.is_(None),
+        )
+        .first()
+    )
+
 def user_can_see_course(course: models.Course, user: models.User, db: Session) -> bool:
+    if course.organization_id != user.organization_id:
+        return False
     if course.is_public:
         return True
     if user.role == "admin":
@@ -1074,7 +1115,8 @@ def create_course(course: schemas.CourseCreate, db: Session = Depends(get_db), c
         description=course.description,
         created_by=current_user.id,
         is_public=course.is_public,
-        content_type=course.content_type
+        content_type=course.content_type,
+        organization_id=current_user.organization_id
     )
     db.add(new_course)
     db.commit()
@@ -1088,7 +1130,7 @@ def create_course(course: schemas.CourseCreate, db: Session = Depends(get_db), c
 
 @app.put("/courses/{course_id}", response_model=schemas.CourseResponse)
 def update_course(course_id: int, updated_course: schemas.CourseUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None)).first()
+    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None), models.Course.organization_id == current_user.organization_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
 
@@ -1102,7 +1144,7 @@ def update_course(course_id: int, updated_course: schemas.CourseUpdate, db: Sess
 
 @app.get("/courses", response_model=list[schemas.CourseResponse])
 def get_courses(content_type: str | None = None, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    query = db.query(models.Course).filter(models.Course.deleted_at.is_(None))
+    query = db.query(models.Course).filter(models.Course.deleted_at.is_(None), models.Course.organization_id == current_user.organization_id)
     if content_type:
         query = query.filter(models.Course.content_type == content_type)
     all_courses = query.all()
@@ -1111,7 +1153,7 @@ def get_courses(content_type: str | None = None, db: Session = Depends(get_db), 
 
 @app.get("/courses/{course_id}", response_model=schemas.CourseResponse)
 def get_course(course_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None)).first()
+    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None), models.Course.organization_id == current_user.organization_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
     if not user_can_see_course(course, current_user, db):
@@ -1121,7 +1163,7 @@ def get_course(course_id: int, db: Session = Depends(get_db), current_user: mode
 
 @app.delete("/courses/{course_id}")
 def delete_course(course_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None)).first()
+    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None), models.Course.organization_id == current_user.organization_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
     course.deleted_at = datetime.now(timezone.utc)
@@ -1133,7 +1175,7 @@ def delete_course(course_id: int, db: Session = Depends(get_db), current_user: m
 
 @app.post("/courses/{course_id}/modules", response_model=schemas.ModuleResponse)
 def create_module(course_id: int, module: schemas.ModuleCreate, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None)).first()
+    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.deleted_at.is_(None), models.Course.organization_id == current_user.organization_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
 
@@ -1153,7 +1195,7 @@ def create_module(course_id: int, module: schemas.ModuleCreate, db: Session = De
 
 @app.post("/modules/{module_id}/surveys", response_model=schemas.SurveyResponse)
 def create_survey(module_id: int, survey: schemas.SurveyCreate, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    module = db.query(models.Module).filter(models.Module.id == module_id).first()
+    module = get_module_in_org(db, module_id, current_user)
     if module is None:
         raise HTTPException(status_code=404, detail="Module not found")
 
@@ -1170,7 +1212,7 @@ def create_survey(module_id: int, survey: schemas.SurveyCreate, db: Session = De
 
 @app.post("/surveys/{survey_id}/answer", response_model=schemas.SurveyAnswerResponse)
 def submit_survey_answer(survey_id: int, answer: schemas.SurveyAnswerCreate, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    survey = db.query(models.Survey).filter(models.Survey.id == survey_id).first()
+    survey = get_survey_in_org(db, survey_id, current_user)
     if survey is None:
         raise HTTPException(status_code=404, detail="Survey not found")
 
@@ -1211,7 +1253,7 @@ def get_my_survey_answer(survey_id: int, db: Session = Depends(get_db), current_
 
 @app.get("/surveys/{survey_id}/responses")
 def get_survey_responses(survey_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    survey = db.query(models.Survey).filter(models.Survey.id == survey_id).first()
+    survey = get_survey_in_org(db, survey_id, current_user)
     if survey is None:
         raise HTTPException(status_code=404, detail="Survey not found")
 
@@ -1236,7 +1278,7 @@ def get_survey_responses(survey_id: int, db: Session = Depends(get_db), current_
 
 @app.delete("/surveys/{survey_id}")
 def delete_survey(survey_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    survey = db.query(models.Survey).filter(models.Survey.id == survey_id).first()
+    survey = get_survey_in_org(db, survey_id, current_user)
     if survey is None:
         raise HTTPException(status_code=404, detail="Survey not found")
 
@@ -1249,7 +1291,7 @@ def delete_survey(survey_id: int, db: Session = Depends(get_db), current_user: m
 
 @app.post("/modules/{module_id}/attachments", response_model=schemas.AttachmentResponse)
 def upload_attachment(module_id: int, file: UploadFile = File(...), db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    module = db.query(models.Module).filter(models.Module.id == module_id).first()
+    module = get_module_in_org(db, module_id, current_user)
     if module is None:
         raise HTTPException(status_code=404, detail="Module not found")
 
@@ -1270,7 +1312,7 @@ def upload_attachment(module_id: int, file: UploadFile = File(...), db: Session 
 
 @app.delete("/attachments/{attachment_id}")
 def delete_attachment(attachment_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    attachment = db.query(models.Attachment).filter(models.Attachment.id == attachment_id).first()
+    attachment = get_attachment_in_org(db, attachment_id, current_user)
     if attachment is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
@@ -1285,7 +1327,7 @@ def delete_attachment(attachment_id: int, db: Session = Depends(get_db), current
 
 @app.get("/modules/{module_id}", response_model=schemas.ModuleResponse)
 def get_module(module_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(get_current_user)):
-    module = db.query(models.Module).filter(models.Module.id == module_id).first()
+    module = get_module_in_org(db, module_id, current_user)
     if module is None:
         raise HTTPException(status_code=404, detail="Module not found")
     return module
@@ -1631,7 +1673,7 @@ def search(q: str, db: Session = Depends(get_db), current_user: models.User = De
     query = f"%{q.strip()}%"
     results = []
 
-    matching_courses = db.query(models.Course).filter(models.Course.title.ilike(query), models.Course.deleted_at.is_(None)).all()
+    matching_courses = db.query(models.Course).filter(models.Course.title.ilike(query), models.Course.deleted_at.is_(None), models.Course.organization_id == current_user.organization_id).all()
     for c in matching_courses:
         if user_can_see_course(c, current_user, db):
             results.append({"type": "Course", "title": c.title, "path": f"/programming/{c.id}"})
@@ -1796,7 +1838,7 @@ def permanently_delete_user(user_id: int, db: Session = Depends(get_db), current
 
 @app.get("/archive/courses")
 def get_archived_courses(db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    courses = db.query(models.Course).filter(models.Course.deleted_at.is_not(None)).all()
+    courses = db.query(models.Course).filter(models.Course.deleted_at.is_not(None), models.Course.organization_id == current_user.organization_id).all()
     return [
         {"id": c.id, "title": c.title, "deleted_at": c.deleted_at}
         for c in courses
@@ -1805,7 +1847,7 @@ def get_archived_courses(db: Session = Depends(get_db), current_user: models.Use
 
 @app.post("/archive/courses/{course_id}/restore")
 def restore_course(course_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.organization_id == current_user.organization_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
     course.deleted_at = None
@@ -1816,7 +1858,7 @@ def restore_course(course_id: int, db: Session = Depends(get_db), current_user: 
 
 @app.delete("/archive/courses/{course_id}/permanent")
 def permanently_delete_course(course_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(require_admin)):
-    course = db.query(models.Course).filter(models.Course.id == course_id).first()
+    course = db.query(models.Course).filter(models.Course.id == course_id, models.Course.organization_id == current_user.organization_id).first()
     if course is None:
         raise HTTPException(status_code=404, detail="Course not found")
 
